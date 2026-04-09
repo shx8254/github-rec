@@ -65,6 +65,55 @@ def cmd_filters(storage: Storage, args):
         print(f"  ✗ {row['full_name']} — {row['reason']} ({row['filtered_at']})")
 
 
+def cmd_export(storage: Storage, args):
+    recs = storage.get_recommendations()
+    if not recs:
+        print("没有推荐结果，请先运行 recommend")
+        return
+
+    if args.format == "json":
+        path = args.output or "recommendations.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(recs, f, indent=2, ensure_ascii=False)
+        print(f"已导出 {len(recs)} 条到 {path}")
+
+    elif args.format == "markdown":
+        path = args.output or "recommendations.md"
+        lines = [
+            f"# 为你推荐的 {len(recs)} 个仓库",
+            "",
+            "| # | 仓库 | 语言 | ★ | 推荐原因 |",
+            "|---|------|------|---|----------|",
+        ]
+        for i, rec in enumerate(recs, 1):
+            stars = rec.get("stargazers_count", 0)
+            lang = rec.get("language") or "N/A"
+            reasons = " · ".join(rec.get("reasons", [])[:2])
+            url = rec.get("html_url") or f"https://github.com/{rec['full_name']}"
+            lines.append(f"| {i} | [{rec['full_name']}]({url}) | {lang} | {stars} | {reasons} |")
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        print(f"已导出 {len(recs)} 条到 {path}")
+
+    elif args.format == "csv":
+        path = args.output or "recommendations.csv"
+        import csv
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["#", "full_name", "language", "stars", "url", "reasons"])
+            for i, rec in enumerate(recs, 1):
+                writer.writerow([
+                    i,
+                    rec["full_name"],
+                    rec.get("language") or "",
+                    rec.get("stargazers_count", 0),
+                    rec.get("html_url") or f"https://github.com/{rec['full_name']}",
+                    " | ".join(rec.get("reasons", [])),
+                ])
+        print(f"已导出 {len(recs)} 条到 {path}")
+
+
 def cmd_init(args):
     src = os.path.join(os.path.dirname(__file__), "config.example.json")
     if os.path.exists(src):
@@ -103,6 +152,11 @@ def main():
     p_filters = sub.add_parser("filters", help="查看过滤记录")
     p_filters.add_argument("-n", "--limit", type=int, default=50)
 
+    p_export = sub.add_parser("export", help="导出推荐结果到文件")
+    p_export.add_argument("-f", "--format", choices=["json", "markdown", "csv"],
+                          default="markdown", help="输出格式 (默认: markdown)")
+    p_export.add_argument("-o", "--output", help="输出文件路径")
+
     args = parser.parse_args()
 
     if args.cmd == "init":
@@ -126,6 +180,8 @@ def main():
         cmd_list_stars(storage, args)
     elif args.cmd == "filters":
         cmd_filters(storage, args)
+    elif args.cmd == "export":
+        cmd_export(storage, args)
     else:
         client = GitHubRecommender(cfg, storage)
         if args.cmd == "fetch":
