@@ -99,7 +99,7 @@ class GitHubRecommender:
         print("\n正在通过功能描述模糊匹配候选仓库...")
         candidates = fuzzy.find_candidates(
             semantic_profiles,
-            starred_set=starred,
+            starred,
             limit=200,
         )
 

@@ -5,8 +5,9 @@
 
 import re
 import time
+import urllib3
+import requests
 from collections import Counter
-from typing import Optional
 
 from .client import GitHubClient
 
@@ -90,62 +91,52 @@ def extract_functional_type(name: str) -> str | None:
 
 def extract_core_phrases(text: str) -> list[str]:
     """
-    从文本中提取核心功能短语（用于搜索同类型项目）
-    优先提取固定搭配，其次提取连续的实词组合
+    只提取预定义的固定专业搭配，不做 n-gram 自动提取（n-gram 噪音太多）
     """
     if not text:
         return []
-    text_lower = text.lower()
+    text_lower = f" {text.lower()} "
 
-    # 固定专业搭配（最有区分力）
     COMBO_PHRASES = [
         "api gateway", "web api", "rest api", "graphql api",
         "command line", "cli tool", "terminal emulator",
         "machine learning", "deep learning", "neural network",
         "data pipeline", "stream processing", "batch processing",
         "message queue", "event driven", "pub sub",
-        "service mesh", "api gateway", "load balancer",
+        "service mesh", "load balancer",
         "secret manager", "config management", "feature flag",
         "code generation", "boilerplate", "scaffolding",
-        "rate limiting", "circuit breaker", "bulkhead",
+        "rate limiting", "circuit breaker",
         "fault tolerance", "retry policy", "dead letter",
         "real time", "realtime", "server sent events", "websocket",
         "container orchestration", "ci cd pipeline", "gitops",
         "distributed tracing", "metrics collection", "log aggregation",
         "auth server", "token issuer", "session store",
-        "job scheduler", "cron replacement", "workflow engine",
+        "job scheduler", "workflow engine",
         "data serialization", "schema evolution", "api versioning",
         "request validation", "response caching", "query builder",
-        "connection pool", "retry logic", "timeout handling",
-        "hot reload", "live reload", "watch mode",
-        "plugin system", "extension framework", "middleware chain",
-        "rule engine", "expression eval", "template engine",
+        "connection pool", "hot reload", "live reload",
+        "plugin system", "middleware chain",
+        "rule engine", "template engine",
+        "object detection", "image segmentation", "speech recognition",
+        "natural language", "text generation", "llm inference",
+        "code editor", "syntax highlight", "autocomplete",
+        "cross platform", "native app", "desktop app", "mobile app",
+        "database migration", "data sync", "data export", "data import",
+        "http client", "http server", "tcp proxy", "reverse proxy",
+        "background job", "task queue", "cron job", "scheduler",
+        "image generation", "video generation", "voice clone", "speech synthesis",
+        "text to speech", "speech to text", "audio processing",
+        "video editing", "media processing", "image editing",
+        "file transfer", "file sync", "cloud storage",
+        "api client", "http framework", "web framework",
+        "code review", "static analysis", "linter", "formatter",
+        "test framework", "test runner", "mock library",
+        "key value store", "document database", "time series",
+        "container runtime", "serverless", "edge computing",
     ]
 
-    phrases = []
-    for phrase in COMBO_PHRASES:
-        if phrase in text_lower:
-            phrases.append(phrase)
-
-    # 提取 2-gram 名词短语（过滤掉通用词）
-    STOP_NGRAMS = {
-        "the", "and", "for", "with", "from", "that", "this",
-        "using", "based", "fast", "simple", "easy", "lightweight",
-        "powerful", "modern", "open source", "github",
-    }
-    words = re.findall(r"[a-z][a-z0-9-]{2,}", text_lower)
-    for i in range(len(words) - 1):
-        ngram = f"{words[i]} {words[i+1]}"
-        if ngram not in STOP_NGRAMS and len(ngram) > 6:
-            phrases.append(ngram)
-
-    # 3-gram
-    for i in range(len(words) - 2):
-        ngram = f"{words[i]} {words[i+1]} {words[i+2]}"
-        if ngram not in STOP_NGRAMS and len(ngram) > 8:
-            phrases.append(ngram)
-
-    return list(set(phrases))[:30]
+    return [p for p in COMBO_PHRASES if p in text_lower]
 
 
 def build_repo_profile(repo: dict) -> dict:
@@ -161,16 +152,6 @@ def build_repo_profile(repo: dict) -> dict:
     domains = detect_domains(text)
     phrases = extract_core_phrases(text)
     func_type = extract_functional_type(name)
-
-    # 如果没有识别出领域，尝试从描述中再提取
-    if not domains and desc:
-        # 按空格切分，取 3-5 词的片段
-        for size in [3, 4, 5]:
-            words = re.findall(r"[a-z][a-z0-9]{2,}", desc.lower())
-            for i in range(len(words) - size + 1):
-                phrase = " ".join(words[i:i+size])
-                if phrase not in STOPWORDS and len(phrase) > 8:
-                    phrases.append(phrase)
 
     return {
         "full_name": repo.get("full_name"),
@@ -202,37 +183,52 @@ class FuzzyMatcher:
     def __init__(self, client: GitHubClient):
         self.client = client
 
+    def _retry_search(self, query: str, per_page: int = 25) -> list:
+        """带重试的搜索，最多重试3次"""
+        import urllib3
+        for attempt in range(3):
+            try:
+                return self.client.search_repos(query, sort="stars", per_page=per_page)
+            except (
+                urllib3.exceptions.HTTPError,
+                requests.exceptions.SSLError,
+                requests.exceptions.ConnectionError,
+            ) as e:
+                if attempt < 2:
+                    wait = (attempt + 1) * 3
+                    print(f"    重试中 ({attempt+1}/3)，等待 {wait}s...")
+                    time.sleep(wait)
+                else:
+                    print(f"    搜索失败: {e}")
+                    return []
+        return []
+
     def _search_by_phrases(self, phrases: list, seen: set, starred: set,
                            min_stars: int = 30, limit: int = 100) -> list:
         """
         用功能短语搜索同类项目
-        搜索时故意不带 language: 参数，以找到所有语言的同类项目
+        搜索时不限制语言，以找到所有语言的同类项目
         """
         candidates = []
         tried_phrases = 0
 
         for phrase in phrases:
-            if tried_phrases >= 20:
+            if tried_phrases >= 15:
                 break
             tried_phrases += 1
 
             # 搜索：功能短语 + 排除已 star + 排除 fork + 最小 star
-            query = f'"{phrase}" in:description,readme stars:>{min_stars} NOT fork:true'
-            try:
-                results = self.client.search_repos(query, sort="stars", per_page=25)
-                for r in results:
-                    fn = r["full_name"]
-                    if fn not in starred and fn not in seen:
-                        # 记录这个项目是被哪个短语推荐来的
-                        r["_matched_phrase"] = phrase
-                        candidates.append(r)
-                        seen.add(fn)
-                time.sleep(1.2)
-                if len(candidates) >= limit:
-                    break
-            except Exception as e:
-                print(f"    搜索失败 '{phrase}': {e}")
-                time.sleep(2)
+            query = f'"{phrase}" in:description stars:>{min_stars} fork:no'
+            results = self._retry_search(query)
+            for r in results:
+                fn = r["full_name"]
+                if fn not in starred and fn not in seen:
+                    r["_matched_phrase"] = phrase
+                    candidates.append(r)
+                    seen.add(fn)
+            time.sleep(7)
+            if len(candidates) >= limit:
+                break
 
         return candidates
 
@@ -243,19 +239,15 @@ class FuzzyMatcher:
         for domain in domains[:8]:
             if len(candidates) >= limit:
                 break
-            # 用领域名作为搜索关键词
-            query = f"{domain} stars:>20 NOT fork:true pushed:>2023-01-01"
-            try:
-                results = self.client.search_repos(query, sort="stars", per_page=20)
-                for r in results:
-                    fn = r["full_name"]
-                    if fn not in starred and fn not in seen:
-                        r["_matched_phrase"] = f"领域:{domain}"
-                        candidates.append(r)
-                        seen.add(fn)
-                time.sleep(1)
-            except Exception as e:
-                print(f"    领域搜索失败 '{domain}': {e}")
+            query = f'"{domain}" in:description stars:>20 fork:no'
+            results = self._retry_search(query, per_page=20)
+            for r in results:
+                fn = r["full_name"]
+                if fn not in starred and fn not in seen:
+                    r["_matched_phrase"] = f"领域:{domain}"
+                    candidates.append(r)
+                    seen.add(fn)
+            time.sleep(7)
         return candidates
 
     def _search_by_name_pattern(self, profiles: list, seen: set,
@@ -271,10 +263,10 @@ class FuzzyMatcher:
         if not func_types:
             return candidates
 
-        for ftype in set(func_types)[:5]:
+        for ftype in list(set(func_types))[:5]:
             if len(candidates) >= limit:
                 break
-            query = f"{ftype} stars:>50 NOT fork:true"
+            query = f"{ftype} stars:>50 fork:no"
             try:
                 results = self.client.search_repos(query, sort="stars", per_page=15)
                 for r in results:

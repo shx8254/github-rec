@@ -118,13 +118,13 @@ class Storage:
                      forks, topics, pushed_at, score, reasons, recommended_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    rec["owner"],
+                    rec["owner"]["login"] if isinstance(rec.get("owner"), dict) else rec.get("owner", ""),
                     rec["name"],
                     rec["full_name"],
                     rec.get("description"),
                     rec.get("language"),
-                    rec.get("stars", 0),
-                    rec.get("forks", 0),
+                    rec.get("stargazers_count", 0),
+                    rec.get("forks_count", 0),
                     json.dumps(rec.get("topics") or [], ensure_ascii=False),
                     rec.get("pushed_at"),
                     rec.get("score", 0),

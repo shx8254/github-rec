@@ -1,3 +1,4 @@
+import os
 import time
 import requests
 
@@ -10,8 +11,11 @@ HEADERS = {
 class GitHubClient:
     def __init__(self, token: str):
         self.token = token
+        # 创建 session，GitHub API 走直连（跳过代理）
         self.session = requests.Session()
         self.session.headers.update({**HEADERS, "Authorization": f"Bearer {token}"})
+        # 已知某些代理会拦截 search API，直连最可靠
+        self.session.trust_env = False
 
     def _get(self, url: str, params=None):
         resp = self.session.get(url, params=params, timeout=30)
