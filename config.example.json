@@ -1,0 +1,17 @@
+{
+  "github_token": "ghp_xxxxxxxxxxxx",
+  "username": "your-github-username",
+  "db_path": "./data/stars.db",
+  "max_recommendations": 50,
+  "max_stars_to_scan": 500,
+  "min_stars_threshold": 10,
+  "exclude_topics": ["tutorial", "example", "demo", "learn", "course", "beginner"],
+  "exclude_languages": [],
+  "weights": {
+    "topic_overlap": 3,
+    "keyword_match": 1,
+    "has_readme": 1,
+    "recent_update": 2
+  },
+  "recent_update_days": 90
+}
